@@ -1,0 +1,6 @@
+{
+  "server_name": "fridge-chef-mcp",
+  "version": "1.0.0",
+  "backend_base_url": "https://www.themealdb.com/api/json/v1/1",
+  "timeout": 30
+}
