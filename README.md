@@ -130,15 +130,28 @@ Use this first for every recipe request. It accepts one to five simple lowercase
 - Each partial result states both `matched_ingredients` and `unmatched_ingredients`.
 - If TheMealDB recognizes none of the terms, it returns `INGREDIENTS_NOT_RECOGNIZED` as a `user_fixable` result with an actionable suggestion.
 
+### `browse_recipes_by_cuisine_or_category`
+
+Use this when the user asks for a cuisine (`Italian`, `Indian`) or a kind of dish (`Dessert`, `Vegetarian`) instead of listing ingredients. It takes `cuisine`, `category`, or both (the other is `null`), calls TheMealDB `filter.php?a=` / `?c=` concurrently, and returns up to eight meals that match every filter, plus `total_matches`.
+
+- Input is normalized to TheMealDB's title case, so `italian` works.
+- An unknown value returns `UNKNOWN_CUISINE` or `UNKNOWN_CATEGORY` as `user_fixable`, with the valid options fetched live from `list.php`, so the model can offer real choices.
+
 ### `get_recipe_details`
 
-Use this only after the user selects a meal returned by the search tool. It calls TheMealDB `lookup.php` and returns only:
+Use this only after the user selects a meal returned by a search tool. It calls TheMealDB `lookup.php` and returns only:
 
 - Name, category, cuisine area, and thumbnail.
 - A clean list of ingredient/measure pairs collapsed from TheMealDB's 20 numbered fields.
 - Instructions and source URL.
 
 An unknown ID returns `MEAL_NOT_FOUND` as a `user_fixable` result.
+
+When this tool succeeds in Telegram, the chat backend sends the recipe's thumbnail with `sendPhoto` before the text. The image URL is taken from the tool result, never from the model's reply, so the model cannot invent a picture.
+
+### Telegram `/start`
+
+`/start` and `/help` get an instant welcome message straight from the chat backend, without a model call.
 
 ## Response Contract
 
@@ -207,7 +220,19 @@ Fill in `chat-backend/.env`:
 
 All `.env` files are ignored by the root `.gitignore`. Do not paste secrets into source files, shell history, screenshots, chat messages, or the README.
 
-## Run Locally
+## Quick Start: One Command
+
+After the setup above, and with ngrok installed and authenticated:
+
+```bash
+./start.sh
+```
+
+It starts the MCP server, waits for it to be healthy, starts the chat backend (which discovers the tools), opens an ngrok tunnel, reads the new public URL from ngrok's local API, and registers it as the Telegram webhook with your secret. Both services' logs stream into the same window, with copies in `logs/`. Ctrl+C stops everything. Because the webhook is re-registered on every run, ngrok's changing URL is no longer a manual step.
+
+Use `./start.sh --local` to run only the two services and test with `/chat`.
+
+## Run Locally (Step by Step)
 
 Run each service in its own terminal. Start the MCP server first because the chat backend discovers tool definitions during startup and intentionally fails fast if MCP is unavailable.
 
@@ -325,6 +350,12 @@ curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
 4. Confirm the bot presents a short list of real meal names.
 5. Reply: `Show me the first one.`
 6. Show Azure calling `get_recipe_details` with the retained meal ID and the bot returning exact measures and instructions.
+
+### Browse by Cuisine, With a Photo
+
+1. Send: `Something Indian please`.
+2. Azure chooses `browse_recipes_by_cuisine_or_category` with `cuisine: "indian"`. The MCP log shows `filter.php?a=Indian`.
+3. Pick one. `get_recipe_details` runs and the bot sends the dish photo, then the recipe.
 
 ### Graceful Failure
 

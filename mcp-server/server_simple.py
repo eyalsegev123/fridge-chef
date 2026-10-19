@@ -315,6 +315,106 @@ class FridgeChefServer:
             "meals": [format_meal(meal_id, True) for meal_id in ranked_ids],
         }
 
+    async def browse_recipes_by_cuisine_or_category(
+        self, cuisine: Optional[str] = None, category: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """List meals for a cuisine (TheMealDB "area"), a category, or both."""
+        logger.info(
+            "FN browse_recipes_by_cuisine_or_category | cuisine=%s category=%s",
+            cuisine,
+            category,
+        )
+        filters: Dict[str, str] = {}
+        for param, value in (("a", cuisine), ("c", category)):
+            if value is None:
+                continue
+            if not isinstance(value, str) or not re.fullmatch(
+                r"[A-Za-z]+(?: [A-Za-z]+)*", value.strip()
+            ):
+                return wrap_user_fixable(
+                    "INVALID_FILTER",
+                    "cuisine and category must be plain words such as 'Italian'.",
+                    data={"cuisine": cuisine, "category": category},
+                    retryable=True,
+                )
+            # TheMealDB stores names in title case ("Italian", "Seafood").
+            filters[param] = " ".join(value.split()).title()
+        if not filters:
+            return wrap_user_fixable(
+                "MISSING_FILTER",
+                "Provide a cuisine, a category, or both.",
+                retryable=True,
+            )
+
+        responses = await asyncio.gather(
+            *(
+                self._make_backend_request(
+                    "filter.php", method="GET", params={param: value}
+                )
+                for param, value in filters.items()
+            )
+        )
+        meal_sets: List[set[str]] = []
+        meals_by_id: Dict[str, Dict[str, str]] = {}
+        for (param, value), response in zip(filters.items(), responses):
+            if classify_tool_response(response):
+                return response
+            backend_meals = response.get("meals")
+            if not backend_meals:
+                # Unknown names come back as {"meals": null}; answer with the
+                # valid choices so the model can correct itself.
+                return await self._unrecognized_filter(param, value)
+            ids: set[str] = set()
+            for meal in backend_meals:
+                if not isinstance(meal, dict) or not meal.get("idMeal"):
+                    continue
+                meal_id = str(meal["idMeal"])
+                ids.add(meal_id)
+                meals_by_id.setdefault(
+                    meal_id,
+                    {
+                        "meal_id": meal_id,
+                        "name": str(meal.get("strMeal") or "").strip(),
+                        "thumbnail": str(meal.get("strMealThumb") or "").strip(),
+                    },
+                )
+            meal_sets.append(ids)
+
+        matching_ids = sorted(
+            set.intersection(*meal_sets),
+            key=lambda meal_id: (meals_by_id[meal_id]["name"].lower(), meal_id),
+        )
+        return {
+            "cuisine": filters.get("a"),
+            "category": filters.get("c"),
+            "total_matches": len(matching_ids),
+            "meals": [meals_by_id[meal_id] for meal_id in matching_ids[:8]],
+        }
+
+    async def _unrecognized_filter(self, param: str, value: str) -> Dict[str, Any]:
+        field_name, list_key = {
+            "a": ("cuisine", "strArea"),
+            "c": ("category", "strCategory"),
+        }[param]
+        listing = await self._make_backend_request(
+            "list.php", method="GET", params={param: "list"}
+        )
+        options: List[str] = []
+        if not classify_tool_response(listing) and isinstance(
+            listing.get("meals"), list
+        ):
+            options = sorted(
+                str(item[list_key])
+                for item in listing["meals"]
+                if isinstance(item, dict) and item.get(list_key)
+            )
+        return wrap_user_fixable(
+            f"UNKNOWN_{field_name.upper()}",
+            f"'{value}' is not a {field_name} TheMealDB knows, or it has no recipes.",
+            data={field_name: value, f"valid_{field_name}_options": options},
+            retryable=True,
+        )
+
     async def get_recipe_details(self, meal_id: str) -> Dict[str, Any]:
         """Return a compact recipe with normalized ingredient/measure pairs."""
         logger.info("FN get_recipe_details | meal_id=%s", meal_id)
@@ -410,6 +510,9 @@ class FridgeChefServer:
         logger.info("TOOL_START | %s", name)
         dispatch = {
             "find_recipes_by_ingredients": self.find_recipes_by_ingredients,
+            "browse_recipes_by_cuisine_or_category": (
+                self.browse_recipes_by_cuisine_or_category
+            ),
             "get_recipe_details": self.get_recipe_details,
         }
         implementation = dispatch.get(name)
@@ -476,9 +579,10 @@ class FridgeChefServer:
                     },
                     "serverInfo": server_info,
                     "instructions": (
-                        "Use find_recipes_by_ingredients before suggesting recipes. "
-                        "Use get_recipe_details only after a user selects a returned "
-                        "meal. Send only arguments defined by each tool input schema, "
+                        "Use find_recipes_by_ingredients or "
+                        "browse_recipes_by_cuisine_or_category before suggesting "
+                        "recipes. Use get_recipe_details only after a user selects "
+                        "a returned meal. Send only arguments defined by each tool input schema, "
                         "and never include access tokens, passwords, or API keys in "
                         "tool arguments."
                     ),

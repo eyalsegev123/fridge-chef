@@ -4,22 +4,52 @@ Run with: python -m unittest -v test_backend.py
 """
 
 import unittest
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi.testclient import TestClient
 
 import main
-from main import AppServices, TelegramTaskManager, _parse_text_message
+from agent import AgentReply, FridgeChefAgent
+from main import (
+    TELEGRAM_WELCOME_MESSAGE,
+    AppServices,
+    TelegramTaskManager,
+    _parse_text_message,
+    _process_telegram_message,
+)
 from telegram import TelegramClient
 
 
 class FakeAgent:
-    def __init__(self) -> None:
+    def __init__(self, photo_url: Optional[str] = None) -> None:
         self.calls: List[Tuple[str, str]] = []
+        self.photo_url = photo_url
 
-    async def respond(self, conversation_id: str, message: str) -> str:
+    async def respond(self, conversation_id: str, message: str) -> AgentReply:
         self.calls.append((conversation_id, message))
-        return f"echo: {message}"
+        return AgentReply(f"echo: {message}", self.photo_url)
+
+
+class FakeTelegram:
+    def __init__(self) -> None:
+        self.sent: List[Tuple[str, str]] = []
+
+    async def send_typing(self, chat_id: str) -> None:
+        self.sent.append(("typing", chat_id))
+
+    async def send_photo(self, chat_id: str, photo_url: str) -> None:
+        self.sent.append(("photo", photo_url))
+
+    async def send_message(self, chat_id: str, text: str) -> None:
+        self.sent.append(("message", text))
+
+
+def fake_services(agent: FakeAgent, telegram: FakeTelegram) -> AppServices:
+    return AppServices(
+        agent=agent,  # type: ignore[arg-type]
+        telegram=telegram,  # type: ignore[arg-type]
+        webhook_secret="s3cret",
+    )
 
 
 def build_client(chat_access_token: str = "") -> Tuple[TestClient, FakeAgent]:
@@ -41,7 +71,7 @@ class ChatRouteTests(unittest.TestCase):
         client, agent = build_client()
         response = client.post("/chat", json={"chat_id": "a", "message": "hi"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"reply": "echo: hi"})
+        self.assertEqual(response.json(), {"reply": "echo: hi", "photo_url": None})
         self.assertEqual(agent.calls, [("http:a", "hi")])
 
     def test_chat_requires_bearer_token_when_configured(self) -> None:
@@ -74,6 +104,47 @@ class TelegramWebhookTests(unittest.TestCase):
         )
         self.assertIsNone(_parse_text_message({"message": {"chat": {"id": 7}}}))
         self.assertIsNone(_parse_text_message({"edited_message": {}}))
+
+
+class TelegramProcessingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_command_answers_without_the_model(self) -> None:
+        agent, telegram = FakeAgent(), FakeTelegram()
+        await _process_telegram_message(
+            fake_services(agent, telegram), "1", "/start"
+        )
+        self.assertEqual(agent.calls, [])
+        self.assertEqual(telegram.sent, [("message", TELEGRAM_WELCOME_MESSAGE)])
+
+    async def test_recipe_photo_is_sent_before_the_text(self) -> None:
+        agent = FakeAgent(photo_url="https://img.example/1.jpg")
+        telegram = FakeTelegram()
+        await _process_telegram_message(
+            fake_services(agent, telegram), "1", "show me the first one"
+        )
+        self.assertEqual(
+            telegram.sent,
+            [
+                ("typing", "1"),
+                ("photo", "https://img.example/1.jpg"),
+                ("message", "echo: show me the first one"),
+            ],
+        )
+
+
+class RecipePhotoTests(unittest.TestCase):
+    def test_photo_comes_only_from_successful_recipe_details(self) -> None:
+        details = {
+            "status": "success",
+            "data": {"instructions": "Cook.", "thumbnail": "https://img/1.jpg"},
+        }
+        search = {
+            "status": "success",
+            "data": {"meals": [{"thumbnail": "https://img/2.jpg"}]},
+        }
+        failed = {"status": "user_fixable", "data": None}
+        self.assertEqual(FridgeChefAgent._recipe_photo(details), "https://img/1.jpg")
+        self.assertIsNone(FridgeChefAgent._recipe_photo(search))
+        self.assertIsNone(FridgeChefAgent._recipe_photo(failed))
 
 
 class TelegramQueueTests(unittest.IsolatedAsyncioTestCase):

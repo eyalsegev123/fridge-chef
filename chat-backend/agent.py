@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from collections import OrderedDict, deque
+from dataclasses import dataclass
 from typing import Any, Deque, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import httpx
@@ -17,6 +18,14 @@ from prompt import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 JsonObject = Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AgentReply:
+    """The model's text plus an optional recipe photo taken from tool data."""
+
+    text: str
+    photo_url: Optional[str] = None
 
 
 class AzureOpenAIError(RuntimeError):
@@ -194,7 +203,7 @@ class FridgeChefAgent:
         self._tools = [dict(tool) for tool in tools]
         self._history = history or ConversationHistory(max_turns=10)
 
-    async def respond(self, conversation_id: str, message: str) -> str:
+    async def respond(self, conversation_id: str, message: str) -> AgentReply:
         """Respond to one message while preserving ordered per-chat context."""
         cleaned_message = message.strip()
         if not conversation_id:
@@ -212,10 +221,10 @@ class FridgeChefAgent:
                     )
                 except AzureOpenAIError as exc:
                     logger.warning("AZURE_RESPONSE_ERROR | %s", exc)
-                    reply = self.SERVICE_UNAVAILABLE_MESSAGE
+                    reply = AgentReply(self.SERVICE_UNAVAILABLE_MESSAGE)
                     turn_items = [
                         {"role": "user", "content": cleaned_message},
-                        {"role": "assistant", "content": reply},
+                        {"role": "assistant", "content": reply.text},
                     ]
                 self._history.append_turn(conversation_id, turn_items)
         finally:
@@ -227,10 +236,13 @@ class FridgeChefAgent:
         conversation_id: str,
         message: str,
         history_items: List[JsonObject],
-    ) -> Tuple[str, List[JsonObject]]:
+    ) -> Tuple[AgentReply, List[JsonObject]]:
         user_item: JsonObject = {"role": "user", "content": message}
         model_input = [*history_items, user_item]
         turn_items: List[JsonObject] = [user_item]
+        # The photo comes from tool data, never from the model's text, so the
+        # model cannot invent an image URL.
+        photo_url: Optional[str] = None
 
         for round_number in range(1, self.MAX_MODEL_ROUNDS + 1):
             logger.info("AZURE_ROUND_START | round=%d", round_number)
@@ -246,7 +258,7 @@ class FridgeChefAgent:
                         "Azure OpenAI response did not contain reply text"
                     )
                 turn_items.append({"role": "assistant", "content": reply})
-                return reply, turn_items
+                return AgentReply(reply, photo_url), turn_items
 
             # The Responses API expects its output items back in the next input.
             model_input.extend(output_items)
@@ -261,6 +273,7 @@ class FridgeChefAgent:
                 envelope = await self._execute_tool(
                     conversation_id, function_call
                 )
+                photo_url = self._recipe_photo(envelope) or photo_url
                 tool_output = {
                     "type": "function_call_output",
                     "call_id": function_call["call_id"],
@@ -272,7 +285,7 @@ class FridgeChefAgent:
         turn_items.append(
             {"role": "assistant", "content": self.LOOP_LIMIT_MESSAGE}
         )
-        return self.LOOP_LIMIT_MESSAGE, turn_items
+        return AgentReply(self.LOOP_LIMIT_MESSAGE), turn_items
 
     async def _execute_tool(
         self, conversation_id: str, function_call: JsonObject
@@ -310,6 +323,21 @@ class FridgeChefAgent:
             time.perf_counter() - started,
         )
         return envelope
+
+    @staticmethod
+    def _recipe_photo(envelope: Mapping[str, Any]) -> Optional[str]:
+        """Return the thumbnail of a successfully fetched recipe, if any."""
+        if envelope.get("status") != "success":
+            return None
+        data = envelope.get("data")
+        # Only get_recipe_details returns a single recipe with a top-level
+        # thumbnail; search results keep thumbnails inside their meal lists.
+        if not isinstance(data, dict) or "instructions" not in data:
+            return None
+        thumbnail = data.get("thumbnail")
+        if isinstance(thumbnail, str) and thumbnail.startswith("https://"):
+            return thumbnail
+        return None
 
     @staticmethod
     def _function_calls(output_items: Sequence[Any]) -> List[JsonObject]:

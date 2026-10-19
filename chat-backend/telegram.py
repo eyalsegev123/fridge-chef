@@ -40,6 +40,10 @@ class TelegramClient:
             "sendChatAction", {"chat_id": chat_id, "action": "typing"}
         )
 
+    async def send_photo(self, chat_id: str, photo_url: str) -> None:
+        """Send an image by URL; Telegram downloads it from the source."""
+        await self._post("sendPhoto", {"chat_id": chat_id, "photo": photo_url})
+
     async def send_message(self, chat_id: str, text: str) -> None:
         """Send a reply in ordered chunks that satisfy Telegram's size limit."""
         for chunk in self.split_message(text):

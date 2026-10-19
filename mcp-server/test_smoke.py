@@ -198,6 +198,63 @@ class FridgeChefSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(envelope["status"], "user_fixable")
         self.assertEqual(envelope["error"]["code"], "INVALID_INGREDIENTS")
 
+    async def test_browse_by_cuisine_and_category_intersects(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params == {"a": "Italian"}:
+                meals = [
+                    {"idMeal": "1", "strMeal": "Lasagne", "strMealThumb": "t1"},
+                    {"idMeal": "2", "strMeal": "Tiramisu", "strMealThumb": "t2"},
+                ]
+            elif params == {"c": "Dessert"}:
+                meals = [
+                    {"idMeal": "2", "strMeal": "Tiramisu", "strMealThumb": "t2"},
+                    {"idMeal": "3", "strMeal": "Pavlova", "strMealThumb": "t3"},
+                ]
+            else:
+                self.fail(f"unexpected request {params}")
+            return httpx.Response(200, json={"meals": meals})
+
+        self.use_backend(handler)
+        envelope = await self.call_tool(
+            "browse_recipes_by_cuisine_or_category",
+            {"cuisine": " italian ", "category": "dessert"},
+        )
+        self.assertEqual(envelope["status"], "success")
+        self.assertEqual(envelope["data"]["cuisine"], "Italian")
+        self.assertEqual(envelope["data"]["total_matches"], 1)
+        self.assertEqual(envelope["data"]["meals"][0]["name"], "Tiramisu")
+
+    async def test_unknown_cuisine_lists_valid_options(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path.rsplit("/", 1)[-1]
+            if path == "filter.php":
+                return httpx.Response(200, json={"meals": None})
+            self.assertEqual(path, "list.php")
+            self.assertEqual(request.url.params["a"], "list")
+            return httpx.Response(
+                200, json={"meals": [{"strArea": "Thai"}, {"strArea": "Indian"}]}
+            )
+
+        self.use_backend(handler)
+        envelope = await self.call_tool(
+            "browse_recipes_by_cuisine_or_category",
+            {"cuisine": "Atlantis", "category": None},
+        )
+        self.assertEqual(envelope["status"], "user_fixable")
+        self.assertEqual(envelope["error"]["code"], "UNKNOWN_CUISINE")
+        self.assertEqual(
+            envelope["data"]["valid_cuisine_options"], ["Indian", "Thai"]
+        )
+
+    async def test_browse_without_filters_is_user_fixable(self) -> None:
+        self.use_backend(lambda _request: self.fail("API must not be called"))
+        envelope = await self.call_tool(
+            "browse_recipes_by_cuisine_or_category",
+            {"cuisine": None, "category": None},
+        )
+        self.assertEqual(envelope["error"]["code"], "MISSING_FILTER")
+
     async def test_unknown_meal_id_is_user_fixable(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.url.path.rsplit("/", 1)[-1], "lookup.php")
@@ -267,7 +324,11 @@ class FridgeChefSmokeTests(unittest.IsolatedAsyncioTestCase):
         tools = response["result"]["tools"]
         self.assertEqual(
             [tool["name"] for tool in tools],
-            ["find_recipes_by_ingredients", "get_recipe_details"],
+            [
+                "find_recipes_by_ingredients",
+                "browse_recipes_by_cuisine_or_category",
+                "get_recipe_details",
+            ],
         )
         self.assertFalse(tools[0]["inputSchema"]["additionalProperties"])
         self.assertEqual(
@@ -276,7 +337,7 @@ class FridgeChefSmokeTests(unittest.IsolatedAsyncioTestCase):
         # Strict function calling rejects minLength, so the schema must not use it.
         self.assertNotIn("minLength", json.dumps(tools))
         self.assertEqual(
-            tools[1]["inputSchema"]["properties"]["meal_id"]["pattern"],
+            tools[2]["inputSchema"]["properties"]["meal_id"]["pattern"],
             "^[0-9]+$",
         )
 
