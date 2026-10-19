@@ -203,6 +203,7 @@ Fill in `chat-backend/.env`:
 | `AZURE_OPENAI_DEPLOYMENT` | Azure deployment name sent as the Responses API `model`. |
 | `TELEGRAM_BOT_TOKEN` | BotFather token used only for Telegram Bot API calls. |
 | `TELEGRAM_WEBHOOK_SECRET` | Random letters, digits, `_`, or `-`, used to authenticate incoming webhook requests. |
+| `CHAT_ACCESS_TOKEN` | Optional. When set, `POST /chat` requires `Authorization: Bearer <token>`. Set it before running ngrok, which makes every route on port 8000 public, not only the webhook. |
 
 All `.env` files are ignored by the root `.gitignore`. Do not paste secrets into source files, shell history, screenshots, chat messages, or the README.
 
@@ -343,6 +344,16 @@ python -m unittest -v test_smoke.py
 
 The suite covers exact multi-ingredient matching, ranked partial matches, unrecognized terms, unknown meal IDs, ingredient/measure normalization, tool discovery, and equality between text and structured MCP results.
 
+The chat backend tests replace the agent with a fake, so they need no MCP server, Azure key, or Telegram token:
+
+```bash
+cd chat-backend
+source .venv/bin/activate
+python -m unittest -v test_backend.py
+```
+
+They cover `/chat` authentication, webhook secret rejection, Telegram update parsing, same-chat FIFO ordering, and message splitting.
+
 Useful syntax checks:
 
 ```bash
@@ -363,6 +374,7 @@ chat-backend/.venv/bin/python -m py_compile \
 
 - MCP access is protected by `Authorization: Bearer <MCP_ACCESS_TOKEN>`.
 - Telegram webhook access is independently protected by its secret-token header.
+- `/chat` is open by default for local development. Set `CHAT_ACCESS_TOKEN` whenever the backend is reachable through ngrok.
 - Azure and Telegram credentials exist only in the chat backend process.
 - The MCP transport recursively redacts fields whose names contain token-, secret-, password-, authorization-, API-key-, email-, or phone-related terms.
 - MCP tool calls include `x-conversation-id`, producing correlated files under `mcp-server/conv_logs/` for local debugging. Those logs are ignored by Git.

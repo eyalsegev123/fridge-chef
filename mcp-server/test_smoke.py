@@ -177,6 +177,27 @@ class FridgeChefSmokeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("simpler", envelope["error"]["message"].lower())
 
+    async def test_ingredient_casing_and_spacing_are_normalized(self) -> None:
+        requested = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested.append(request.url.params["i"])
+            return httpx.Response(200, json={"meals": None})
+
+        self.use_backend(handler)
+        await self.call_tool(
+            "find_recipes_by_ingredients", {"ingredients": ["  Chicken   Breast "]}
+        )
+        self.assertEqual(requested, ["chicken breast"])
+
+    async def test_quantities_are_rejected_before_calling_the_api(self) -> None:
+        self.use_backend(lambda _request: self.fail("API must not be called"))
+        envelope = await self.call_tool(
+            "find_recipes_by_ingredients", {"ingredients": ["2 eggs"]}
+        )
+        self.assertEqual(envelope["status"], "user_fixable")
+        self.assertEqual(envelope["error"]["code"], "INVALID_INGREDIENTS")
+
     async def test_unknown_meal_id_is_user_fixable(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.url.path.rsplit("/", 1)[-1], "lookup.php")
@@ -252,6 +273,8 @@ class FridgeChefSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             tools[0]["inputSchema"]["properties"]["ingredients"]["maxItems"], 5
         )
+        # Strict function calling rejects minLength, so the schema must not use it.
+        self.assertNotIn("minLength", json.dumps(tools))
         self.assertEqual(
             tools[1]["inputSchema"]["properties"]["meal_id"]["pattern"],
             "^[0-9]+$",

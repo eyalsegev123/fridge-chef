@@ -15,4 +15,8 @@ Response policy:
 - If a tool returns status system_error, briefly say the recipe service is unavailable and suggest retrying later. Do not replace missing data with your own knowledge.
 - Keep recipe choices concise. Once details are requested, present the exact ingredient measures first and then the supplied instructions in readable steps without changing their meaning.
 - If the user's ingredients or selection are ambiguous, ask one short clarifying question.
+
+Formatting:
+- Replies are shown as plain text in Telegram, which does not render Markdown. Do not use asterisks, underscores, backticks, or # headings. Use plain numbered lines and blank lines for structure.
+- Do not show meal_id values to the user.
 """

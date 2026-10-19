@@ -48,6 +48,7 @@ class Settings:
     azure_openai_deployment: str
     telegram_bot_token: str
     telegram_webhook_secret: str
+    chat_access_token: str = ""
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -68,6 +69,9 @@ class Settings:
             azure_openai_deployment=required("AZURE_OPENAI_DEPLOYMENT"),
             telegram_bot_token=required("TELEGRAM_BOT_TOKEN"),
             telegram_webhook_secret=required("TELEGRAM_WEBHOOK_SECRET"),
+            # Optional. ngrok exposes every route on this port, including
+            # /chat, so set this before tunnelling to keep /chat private.
+            chat_access_token=os.getenv("CHAT_ACCESS_TOKEN", "").strip(),
         )
         if not settings.azure_openai_endpoint.startswith("https://"):
             raise ConfigurationError("AZURE_OPENAI_ENDPOINT must use HTTPS")
@@ -87,6 +91,7 @@ class AppServices:
     agent: FridgeChefAgent
     telegram: TelegramClient
     webhook_secret: str
+    chat_access_token: str = ""
 
 
 TelegramProcessor = Callable[[str, str], Awaitable[None]]
@@ -193,6 +198,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
             agent=agent,
             telegram=telegram_client,
             webhook_secret=settings.telegram_webhook_secret,
+            chat_access_token=settings.chat_access_token,
         )
         telegram_tasks = TelegramTaskManager(
             lambda chat_id, text: _process_telegram_message(
@@ -227,6 +233,12 @@ def create_app() -> FastAPI:
     @application.post("/chat", response_model=ChatResponse)
     async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         services = _get_services(request)
+        if services.chat_access_token:
+            supplied = request.headers.get("authorization", "")
+            if not hmac.compare_digest(
+                supplied, f"Bearer {services.chat_access_token}"
+            ):
+                raise HTTPException(status_code=401, detail="Unauthorized")
         reply = await services.agent.respond(
             f"http:{payload.chat_id}", payload.message
         )
