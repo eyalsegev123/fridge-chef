@@ -157,8 +157,8 @@ def get_server() -> FridgeChefServer:
 
 
 app = FastAPI(
-    title="MCP Template Via TIFF",
-    description="Generic MCP server template",
+    title="Fridge Chef MCP Server",
+    description="MCP tools for finding TheMealDB recipes by ingredient",
     version="1.0.0",
 )
 

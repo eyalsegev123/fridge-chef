@@ -25,7 +25,9 @@ def get_available_tools() -> List[Dict[str, Any]]:
                         "type": "array",
                         "items": {
                             "type": "string",
-                            "minLength": 1,
+                            # No minLength: Azure/OpenAI strict function schemas
+                            # do not accept it, and the pattern already requires
+                            # at least one letter.
                             "pattern": "^[a-z]+(?: [a-z]+)*$",
                             "description": (
                                 "One simple lowercase ingredient, without quantities, "

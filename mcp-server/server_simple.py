@@ -185,8 +185,10 @@ class FridgeChefServer:
             if not isinstance(ingredient, str):
                 invalid.append(ingredient)
                 continue
-            value = ingredient.strip()
-            if value != value.lower() or not re.fullmatch(
+            # Forgive casing and extra spaces ("Chicken  Breast"); still reject
+            # quantities, punctuation, and comma-separated lists.
+            value = " ".join(ingredient.split()).lower()
+            if not re.fullmatch(
                 r"[a-z]+(?: [a-z]+)*", value
             ):
                 invalid.append(ingredient)
