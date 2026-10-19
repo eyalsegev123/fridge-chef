@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from agent import AzureResponsesClient, FridgeChefAgent
+from agent import AgentReply, AzureResponsesClient, FridgeChefAgent
 from mcp_client import MCPClient
 from telegram import TelegramClient, TelegramClientError
 
@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 TELEGRAM_BUSY_MESSAGE = (
     "I'm handling several recipe requests right now. Please try again shortly."
+)
+TELEGRAM_WELCOME_MESSAGE = (
+    "Hi! I'm Fridge Chef. Tell me what's in your fridge, for example "
+    "\"I have chicken and rice\", and I'll find real recipes you can make.\n\n"
+    "You can also ask for a cuisine or a kind of dish, like "
+    "\"something Italian\" or \"a vegetarian dish\"."
 )
 
 
@@ -172,6 +178,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    photo_url: Optional[str] = None
 
 
 @asynccontextmanager
@@ -242,7 +249,7 @@ def create_app() -> FastAPI:
         reply = await services.agent.respond(
             f"http:{payload.chat_id}", payload.message
         )
-        return ChatResponse(reply=reply)
+        return ChatResponse(reply=reply.text, photo_url=reply.photo_url)
 
     @application.post("/telegram/webhook")
     async def telegram_webhook(request: Request) -> Dict[str, Any]:
@@ -307,9 +314,23 @@ def _parse_text_message(update: Any) -> tuple[str, str] | None:
     return str(chat_id), cleaned_text
 
 
+def _is_start_command(text: str) -> bool:
+    # Telegram sends "/start" when someone opens the bot, and "/start@BotName"
+    # in groups. Answering locally avoids spending a model call on it.
+    command = text.split(maxsplit=1)[0].split("@", 1)[0].lower()
+    return command in {"/start", "/help"}
+
+
 async def _process_telegram_message(
     services: AppServices, chat_id: str, text: str
 ) -> None:
+    if _is_start_command(text):
+        try:
+            await services.telegram.send_message(chat_id, TELEGRAM_WELCOME_MESSAGE)
+        except TelegramClientError:
+            logger.error("TELEGRAM_REPLY_FAILED | chat_id=%s", chat_id)
+        return
+
     try:
         await services.telegram.send_typing(chat_id)
     except TelegramClientError:
@@ -319,10 +340,17 @@ async def _process_telegram_message(
         reply = await services.agent.respond(f"telegram:{chat_id}", text)
     except Exception:
         logger.exception("TELEGRAM_AGENT_FAILED | chat_id=%s", chat_id)
-        reply = FridgeChefAgent.SERVICE_UNAVAILABLE_MESSAGE
+        reply = AgentReply(FridgeChefAgent.SERVICE_UNAVAILABLE_MESSAGE)
+
+    if reply.photo_url:
+        try:
+            await services.telegram.send_photo(chat_id, reply.photo_url)
+        except TelegramClientError:
+            # A missing picture should never block the recipe text.
+            logger.warning("TELEGRAM_PHOTO_FAILED | chat_id=%s", chat_id)
 
     try:
-        await services.telegram.send_message(chat_id, reply)
+        await services.telegram.send_message(chat_id, reply.text)
     except TelegramClientError:
         logger.error("TELEGRAM_REPLY_FAILED | chat_id=%s", chat_id)
 

@@ -46,12 +46,46 @@ def get_available_tools() -> List[Dict[str, Any]]:
             },
         },
         {
+            "name": "browse_recipes_by_cuisine_or_category",
+            "description": (
+                "Use this when the user asks for a cuisine (such as Italian or "
+                "Indian) or a kind of dish (such as Dessert, Vegetarian, Seafood) "
+                "instead of listing ingredients. Set cuisine, category, or both; "
+                "pass null for the one the user did not mention. If a value is not "
+                "recognized, the result lists the valid options."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "cuisine": {
+                        # Strict function calling requires every property to be
+                        # listed in "required", so optional values are nullable.
+                        "type": ["string", "null"],
+                        "description": (
+                            "A cuisine or country name such as 'Italian', "
+                            "'Mexican' or 'Japanese', or null."
+                        ),
+                    },
+                    "category": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "A dish category such as 'Dessert', 'Vegetarian', "
+                            "'Seafood' or 'Pasta', or null."
+                        ),
+                    },
+                },
+                "required": ["cuisine", "category"],
+            },
+        },
+        {
             "name": "get_recipe_details",
             "description": (
                 "Use this only after the user selects a meal returned by "
-                "find_recipes_by_ingredients. Fetches the exact ingredients, measures, "
-                "instructions, image, and source for that meal; do not use it to search "
-                "for recipe ideas."
+                "find_recipes_by_ingredients or "
+                "browse_recipes_by_cuisine_or_category. Fetches the exact "
+                "ingredients, measures, instructions, image, and source for that "
+                "meal; do not use it to search for recipe ideas."
             ),
             "inputSchema": {
                 "type": "object",
@@ -61,8 +95,7 @@ def get_available_tools() -> List[Dict[str, Any]]:
                         "type": "string",
                         "pattern": "^[0-9]+$",
                         "description": (
-                            "The digits-only meal ID returned by "
-                            "find_recipes_by_ingredients."
+                            "The digits-only meal ID returned by a search tool."
                         ),
                     }
                 },
