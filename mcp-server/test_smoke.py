@@ -225,6 +225,34 @@ class FridgeChefSmokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(envelope["data"]["total_matches"], 1)
         self.assertEqual(envelope["data"]["meals"][0]["name"], "Tiramisu")
 
+    async def test_cuisine_falls_back_to_its_country_name(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path.rsplit("/", 1)[-1]
+            if path == "list.php":
+                return httpx.Response(
+                    200,
+                    json={
+                        "meals": [
+                            {"strArea": "Indian", "strCountry": "India"},
+                            {"strArea": "Italian", "strCountry": "Italy"},
+                        ]
+                    },
+                )
+            area = request.url.params["a"]
+            if area == "India":
+                meals = [{"idMeal": "9", "strMeal": "Lamb Biryani"}]
+                return httpx.Response(200, json={"meals": meals})
+            self.assertEqual(area, "Indian")
+            return httpx.Response(200, json={"meals": None})
+
+        self.use_backend(handler)
+        envelope = await self.call_tool(
+            "browse_recipes_by_cuisine_or_category",
+            {"cuisine": "indian", "category": None},
+        )
+        self.assertEqual(envelope["status"], "success")
+        self.assertEqual(envelope["data"]["meals"][0]["name"], "Lamb Biryani")
+
     async def test_unknown_cuisine_lists_valid_options(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             path = request.url.path.rsplit("/", 1)[-1]

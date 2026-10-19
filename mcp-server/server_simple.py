@@ -360,6 +360,18 @@ class FridgeChefServer:
             if classify_tool_response(response):
                 return response
             backend_meals = response.get("meals")
+            if not backend_meals and param == "a":
+                # TheMealDB lists some cuisines by adjective ("Indian") but tags
+                # their meals with the country ("India"). Retry once with the
+                # country it pairs with that cuisine.
+                country = await self._country_for_area(value)
+                if country:
+                    retry = await self._make_backend_request(
+                        "filter.php", method="GET", params={"a": country}
+                    )
+                    if classify_tool_response(retry):
+                        return retry
+                    backend_meals = retry.get("meals")
             if not backend_meals:
                 # Unknown names come back as {"meals": null}; answer with the
                 # valid choices so the model can correct itself.
@@ -390,6 +402,26 @@ class FridgeChefServer:
             "total_matches": len(matching_ids),
             "meals": [meals_by_id[meal_id] for meal_id in matching_ids[:8]],
         }
+
+    async def _country_for_area(self, area: str) -> Optional[str]:
+        listing = await self._make_backend_request(
+            "list.php", method="GET", params={"a": "list"}
+        )
+        if classify_tool_response(listing) or not isinstance(
+            listing.get("meals"), list
+        ):
+            return None
+        for item in listing["meals"]:
+            if not isinstance(item, dict):
+                continue
+            country = str(item.get("strCountry") or "").strip()
+            if (
+                str(item.get("strArea") or "").strip().lower() == area.lower()
+                and country
+                and country.lower() != area.lower()
+            ):
+                return country
+        return None
 
     async def _unrecognized_filter(self, param: str, value: str) -> Dict[str, Any]:
         field_name, list_key = {
